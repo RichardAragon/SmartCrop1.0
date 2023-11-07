@@ -1,0 +1,98 @@
+# Import Required Libraries
+import torch
+from torch import nn, optim
+import numpy as np
+import pandas as pd
+import os
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.feature_selection import mutual_info_regression
+from keras.models import Sequential
+from keras.layers import Conv1D, GRU, Dense
+from tensorflow.keras.losses import MeanSquaredError
+from pydantic import BaseModel
+
+# Define the Input Dataset
+# Load the input CSV file containing all relevant variables
+df = pd.read_csv('input_dataset.csv')
+
+# Add some additional features from different data sources
+df['soiltype'] = pd.read_csv('soiltype.csv') # soil type data from MODIS
+df['vegcover'] = pd.read_csv('vegcover.csv') # vegetation cover data from MODIS
+df['landuse'] = pd.read_csv('landuse.csv') # land use data from SILO
+df['soi'] = pd.read_csv('soi.csv') # Southern Oscillation Index data from GLDAS
+
+# Use mutual information to select the most relevant features
+features = df.drop('soilmoisture', axis=1).columns
+mi = mutual_info_regression(df[features], df['soilmoisture'])
+selected_features = features[mi > 0.1] # select features with MI greater than 0.1
+print("Selected features:", selected_features)
+
+# Split the data into training and validation sets
+x_train, x_val, y_train, y_val = train_test_split(df[selected_features], df['soilmoisture'], test_size=0.2)
+
+# Normalize the data using MinMaxScaler
+scaler = MinMaxScaler()
+x_train = scaler.fit_transform(np.array(x_train))
+x_val = scaler.transform(np.array(x_val))
+y_train = np.array(y_train) / 100 # normalize outputs between [0,1]
+y_val = np.array(y_val) / 100
+
+# Reshape the data for CNN and GRU input
+x_train = x_train.reshape(x_train.shape[0], x_train.shape[1], 1)
+x_val = x_val.reshape(x_val.shape[0], x_val.shape[1], 1)
+
+# Build the Neural Network Architecture
+# Use a hybrid CNN-GRU model
+model = Sequential()
+model.add(Conv1D(filters=32, kernel_size=3, activation='relu', input_shape=(x_train.shape[1], 1)))
+model.add(GRU(units=64, return_sequences=True))
+model.add(GRU(units=64))
+model.add(Dense(units=1, activation='sigmoid'))
+
+# Use MSE as the loss function and Adam as the optimizer
+model.compile(loss=MeanSquaredError(), optimizer='adam', metrics=['mse', 'mae', 'r2'])
+
+# Start the Training Process
+epochs = 100
+history = model.fit(x_train, y_train, epochs=epochs, batch_size=128, validation_data=(x_val, y_val))
+
+# Evaluate the Trained Model
+# Plot the learning curves
+plt.figure(figsize=(12, 8))
+plt.subplot(2, 2, 1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.subplot(2, 2, 2)
+plt.plot(history.history['mse'], label='Training MSE')
+plt.plot(history.history['val_mse'], label='Validation MSE')
+plt.xlabel('Epoch')
+plt.ylabel('MSE')
+plt.legend()
+plt.subplot(2, 2, 3)
+plt.plot(history.history['mae'], label='Training MAE')
+plt.plot(history.history['val_mae'], label='Validation MAE')
+plt.xlabel('Epoch')
+plt.ylabel('MAE')
+plt.legend()
+plt.subplot(2, 2, 4)
+plt.plot(history.history['r2'], label='Training R2')
+plt.plot(history.history['val_r2'], label='Validation R2')
+plt.xlabel('Epoch')
+plt.ylabel('R2')
+plt.legend()
+plt.show()
+
+# Plot the predicted vs actual soil moisture
+y_pred = model.predict(x_val)
+plt.figure(figsize=(8, 6))
+plt.scatter(y_val, y_pred, label='Predicted vs Actual')
+plt.plot([0, 1], [0, 1], 'r', label='Ideal')
+plt.xlabel('Actual Soil Moisture')
+plt.ylabel('Predicted Soil Moisture')
+plt.legend()
+plt.show()
