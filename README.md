@@ -1,0 +1,1 @@
+# SmartCrop1.0
